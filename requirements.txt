@@ -1,0 +1,12 @@
+browser-use==0.1.29
+pyperclip==1.9.0
+gradio==5.10.0
+json-repair
+langchain-mistralai==0.2.4
+#dependencies for FastAPI server
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.4.2
+python-multipart>=0.0.6  # For handling form data
+python-dotenv>=1.0.0     
+aiofiles>=23.2.1        # For async file operations
