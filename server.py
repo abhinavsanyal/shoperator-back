@@ -111,7 +111,7 @@ class AgentConfig(BaseModel):
     llm_api_key: Optional[str] = os.getenv("OPENAI_API_KEY")
     use_own_browser: bool = False
     keep_browser_open: bool = False
-    headless: bool = False
+    headless: bool = True
     disable_security: bool = False
     window_w: int = 1280
     window_h: int = 720
