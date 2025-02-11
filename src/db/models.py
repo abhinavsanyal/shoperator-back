@@ -17,7 +17,7 @@ class AgentRun(BaseModel):
     config: Dict[str, Any]
     history_gif_url: Optional[str] = None  # URL for the agent_history.gif on S3
     recording_url: Optional[str] = None    # URL for the video (.webm) recording on S3
-    agent_history: Optional[Dict[str, Any]] = None  # New field for agent history JSON
+    agent_history: Optional[str] = None  # New field for agent history JSON
     
     class Config:
         json_encoders = {

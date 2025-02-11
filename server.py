@@ -310,16 +310,31 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str):
             db = Database.get_database()
             update_fields = {}
             if _current_agent_state.get("history_gif_url"):
+                print(f"Updating history_gif_url: {_current_agent_state['history_gif_url']}")
                 update_fields["history_gif_url"] = _current_agent_state["history_gif_url"]
             if _current_agent_state.get("recording_url"):
+                print(f"Updating recording_url: {_current_agent_state['recording_url']}")
                 update_fields["recording_url"] = _current_agent_state["recording_url"]
             if _current_agent_state.get("agent_history"):
+                print(f"Updating agent_history:")
                 agent_history_obj = _current_agent_state["agent_history"]
-                # If the object has a .dict() method (e.g., a Pydantic model), convert it.
+                # If the object has a .dict() method (e.g., a Pydantic model), convert it
                 if hasattr(agent_history_obj, "dict"):
-                    update_fields["agent_history"] = agent_history_obj.dict()
+                    history_dict = agent_history_obj.dict()
+                    # Remove the "state" field from each history item
+                    if "history" in history_dict:
+                        for history_item in history_dict["history"]:
+                            if "state" in history_item:
+                                del history_item["state"]
+                    update_fields["agent_history"] = history_dict
                 else:
-                    update_fields["agent_history"] = agent_history_obj
+                    # Handle the case where it's already a dict
+                    history_dict = agent_history_obj
+                    if "history" in history_dict:
+                        for history_item in history_dict["history"]:
+                            if "state" in history_item:
+                                del history_item["state"]
+                    update_fields["agent_history"] = history_dict
             if update_fields:
                 await db.agent_runs.update_one(
                     {"client_id": client_id},

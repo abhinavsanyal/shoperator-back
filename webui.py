@@ -297,24 +297,24 @@ async def run_org_agent(
                 _global_browser = None
 
 async def run_custom_agent(
-        llm,
-        use_own_browser,
-        keep_browser_open,
-        headless,
-        disable_security,
-        window_w,
-        window_h,
-        save_recording_path,
-        save_agent_history_path,
-        save_trace_path,
-        task,
-        add_infos,
-        max_steps,
-        use_vision,
-        max_actions_per_step,
-        tool_calling_method,
-        status_callback=None,
-        websocket_callback=None
+    llm,
+    use_own_browser,
+    keep_browser_open,
+    headless,
+    disable_security,
+    window_w,
+    window_h,
+    save_recording_path,
+    save_agent_history_path,
+    save_trace_path,
+    task,
+    add_infos,
+    max_steps,
+    use_vision,
+    max_actions_per_step,
+    tool_calling_method,
+    status_callback=None,
+    websocket_callback=None
 ):
     try:
         global _global_browser, _global_browser_context, _global_agent_state
@@ -413,7 +413,8 @@ async def run_custom_agent(
         import traceback
         traceback.print_exc()
         errors = str(e) + "\n" + traceback.format_exc()
-        return '', errors, '', '', None, None, None
+        # Return all expected values even in error case
+        return ('', errors, '', '', None, None, None, None, None, None)  # Return 10 values
     finally:
         # Handle cleanup based on persistence configuration
         if not keep_browser_open:
