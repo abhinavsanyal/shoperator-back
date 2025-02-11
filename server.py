@@ -1,7 +1,8 @@
 import os
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, SecretStr
 from typing import Optional, List, Dict, Any, Set
 import asyncio
 import uvicorn
@@ -24,7 +25,9 @@ from webui import (
 
 # Import the database modules
 from src.db.db import Database
-from src.db.models import AgentRun, ResearchRun
+from src.db.models import AgentRun, ResearchRun, User
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
 
 # Initialize FastAPI app
 app = FastAPI(title="Shoperator Agent API")
@@ -99,6 +102,7 @@ manager = ConnectionManager()
 
 # Pydantic models for request validation
 class AgentConfig(BaseModel):
+    clerk_id: str  
     agent_type: str = "custom"
     llm_provider: str = "openai"
     llm_model_name: str = "gpt-4o-mini"
@@ -164,6 +168,18 @@ async def run_agent(config: AgentConfig, background_tasks: BackgroundTasks):
     global _current_agent_state
     
     try:
+        # Validate task with guardrail
+        validation = await guardrail(config.task)
+        if not validation["pass"]:
+            # Return a 400 Bad Request instead of 500 Internal Server Error
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Invalid task",
+                    "detail": validation["comment"]
+                }
+            )
+            
         # Create a unique client_id for this session
         client_id = str(datetime.now().timestamp())
         
@@ -171,9 +187,10 @@ async def run_agent(config: AgentConfig, background_tasks: BackgroundTasks):
         if config.save_agent_history_path:
             os.makedirs(config.save_agent_history_path, exist_ok=True)
         
-        # Create agent run record
+        # Create agent run record with clerk_id from request body
         agent_run = AgentRun(
             client_id=client_id,
+            clerk_id=config.clerk_id,  # Use clerk_id from config
             task=config.task,
             max_steps=config.max_steps,
             config=config.model_dump()
@@ -201,7 +218,8 @@ async def run_agent(config: AgentConfig, background_tasks: BackgroundTasks):
         background_tasks.add_task(
             run_agent_with_status_updates,
             config,
-            client_id
+            client_id,
+            agent_run  # Pass the agent_run instance
         )
         
         return {"message": "Agent started successfully", "client_id": client_id}
@@ -210,7 +228,7 @@ async def run_agent(config: AgentConfig, background_tasks: BackgroundTasks):
         _current_agent_state["errors"] = str(e)
         raise HTTPException(status_code=500, detail=str(e))
 
-async def run_agent_with_status_updates(config: AgentConfig, client_id: str):
+async def run_agent_with_status_updates(config: AgentConfig, client_id: str, agent_run: AgentRun):
     """Run the agent while updating status"""
     global _current_agent_state, _global_browser_context
     
@@ -245,7 +263,7 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str):
             
             await manager.broadcast_to_client(client_id, json.dumps(message))
 
-        # Use both callbacks in run_browser_agent
+        # Run the agent with the websocket callback
         result = await run_browser_agent(
             agent_type=config.agent_type,
             llm_provider=config.llm_provider,
@@ -270,7 +288,8 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str):
             max_actions_per_step=config.max_actions_per_step,
             tool_calling_method=config.tool_calling_method,
             status_callback=status_callback if config.agent_type == "custom" else None,
-            websocket_callback=websocket_callback
+            websocket_callback=websocket_callback,
+            agent_run=agent_run
         )
         
         # Unpack extended results when available (custom agent branch returns extra data)
@@ -368,20 +387,34 @@ async def update_agent_status(step_number: int, memory: str, task_progress: str,
     })
 
 @app.post("/agent/stop")
-async def stop_agent():
+async def stop_agent_endpoint():  # Renamed to avoid naming conflict
     """Stop the running agent"""
     global _current_agent_state
     
     try:
+        logger.info("Attempting to stop agent...")
+        # Call the imported stop_agent function from webui
         result = await stop_agent()
-        _current_agent_state.update({
-            "is_running": False,
-            "task_progress": "Stopped by user",
-            "last_update": datetime.now().isoformat()
-        })
-        return {"message": str(result)}
+        
+        if result and isinstance(result, tuple):
+            _current_agent_state.update({
+                "is_running": False,
+                "task_progress": "Stopped by user",
+                "last_update": datetime.now().isoformat()
+            })
+            return {"message": "Agent stopped successfully"}
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid response from stop_agent"}
+            )
+            
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error stopping agent: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to stop agent", "details": str(e)}
+        )
 
 @app.post("/research/run")
 async def run_research(config: DeepResearchConfig):
@@ -477,6 +510,103 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     except:
         logger.info(f"Client {client_id} disconnected from WebSocket")
         await manager.disconnect(websocket, client_id)
+
+@app.post("/clerk-webhook")
+async def clerk_webhook(request: Request):
+    """Handle Clerk webhook events for user management"""
+    try:
+        data = await request.json()
+        
+        if data['type'] in ['user.created', 'user.updated']:
+            user_data = data['data']
+            clerk_id = user_data['id']
+            email = user_data['email_addresses'][0]['email_address']
+            first_name = user_data.get('first_name', '')
+            image_url = user_data.get('image_url', '')
+
+            # Get database instance
+            db = Database.get_database()
+            
+            # Upsert user data
+            await db.users.update_one(
+                {"clerk_id": clerk_id},
+                {
+                    "$set": {
+                        "email": email,
+                        "first_name": first_name,
+                        "image_url": image_url,
+                        "updated_at": datetime.now()
+                    }
+                },
+                upsert=True
+            )
+            
+            return {"message": "User upserted successfully"}
+            
+        return JSONResponse(
+            status_code=400,
+            content={"message": "Unhandled event type"}
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in clerk webhook: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Webhook processing failed: {str(e)}"
+        )
+
+async def get_authenticated_user(clerk_id: str = Header(..., alias="x-clerk-user-id")) -> str:
+    """Dependency to get authenticated clerk_id from request header"""
+    if not clerk_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return clerk_id
+
+async def guardrail(task: str) -> Dict[str, Any]:
+    """
+    Validates if the given task is related to e-commerce/online shopping.
+    Returns a dict with pass status and explanation.
+    """
+    try:
+        print(f"Starting guardrail validation for task: {task}")
+        
+        # Initialize the LLM
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,
+            api_key=SecretStr(os.getenv("OPENAI_API_KEY", ""))
+        )
+        print("LLM initialized successfully")
+        
+        # Create the prompt template with properly escaped JSON
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a task validator that determines if a given task is related to e-commerce, online shopping, or product research. 
+            Respond with 'true' if the task is related to these topics, and 'false' if it isn't.
+            Also provide a brief explanation of your decision.
+            
+            Format your response exactly as:
+            {{"pass": boolean, "comment": "explanation"}}"""),
+            ("user", "Task: {task}")
+        ])
+        print("Prompt template created")
+        
+        # Get the response
+        chain = prompt | llm
+        print("Chain created, invoking LLM...")
+        response = await chain.ainvoke({"task": task})
+        print(f"Raw LLM response: {response.content}")
+        
+        # Parse the response
+        result = json.loads(response.content)
+        print(f"Parsed result: {result}")
+        return result
+        
+    except Exception as e:
+        print(f"Error in guardrail validation: {str(e)}")
+        logger.error(f"Error in guardrail validation: {str(e)}")
+        return {
+            "pass": False,
+            "comment": f"Error validating task: {str(e)}"
+        }
 
 def main():
     """Run the FastAPI server"""

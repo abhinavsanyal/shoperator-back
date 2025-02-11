@@ -115,6 +115,7 @@ class CustomAgent(Agent):
             self,
             task: str,
             llm: BaseChatModel,
+            agent_run=None,
             add_infos: str = "",
             browser: Browser | None = None,
             browser_context: BrowserContext | None = None,
@@ -206,6 +207,7 @@ class CustomAgent(Agent):
         self.screenshot_streamer = None
         if websocket_callback:
             self.screenshot_streamer = ScreenshotStreamer(websocket_callback, interval=0.5)
+        self.agent_run = agent_run
 
     def _setup_action_models(self) -> None:
         """Setup dynamic action models from controller's registry"""
@@ -222,8 +224,11 @@ class CustomAgent(Agent):
             except Exception as e:
                 logger.error(f"Websocket broadcast error: {e}")
 
-    def _log_response(self, response: CustomAgentOutput) -> None:
+    async def _log_response(self, response: CustomAgentOutput) -> None:
         """Improved log response with structured messages"""
+        # Create a list to store this step's chat history
+        step_chat_history = []
+
         # Determine status emoji
         emoji = "✅" if "Success" in response.current_state.prev_action_evaluation else "❌" if "Failed" in response.current_state.prev_action_evaluation else "🤷"
 
@@ -239,28 +244,39 @@ class CustomAgent(Agent):
 
         # Log and broadcast each item
         for prefix, content in log_items.items():
-            logger.info(f"{prefix}: {content}")
-            message = WebSocketMessage(
-                type=WebSocketMessageType.AGENT_LOG.value,
-                data={
-                    "prefix": prefix,
-                    "content": content
-                }
-            )
-            asyncio.create_task(self._broadcast_message(message))
+            if content:  # Only add non-empty content
+                log_entry = f"{prefix}: {content}"
+                logger.info(log_entry)
+                step_chat_history.append(log_entry)
+                message = WebSocketMessage(
+                    type=WebSocketMessageType.AGENT_LOG.value,
+                    data={
+                        "prefix": prefix,
+                        "content": content,
+                        "step": self.n_steps
+                    }
+                )
+                await self._broadcast_message(message)
 
         # Log actions
         for i, action in enumerate(response.action):
-            logger.info(f"🛠️ Action {i + 1}/{len(response.action)}: {action.model_dump_json(exclude_unset=True)}")
+            action_log = f"🛠️ Action {i + 1}/{len(response.action)}: {action.model_dump_json(exclude_unset=True)}"
+            logger.info(action_log)
+            step_chat_history.append(action_log)
             message = WebSocketMessage(
                 type=WebSocketMessageType.AGENT_ACTION.value,
                 data={
                     "action_number": i + 1,
                     "total_actions": len(response.action),
+                    "step": self.n_steps,
                     "action": action.model_dump_json(exclude_unset=True)
                 }
             )
-            asyncio.create_task(self._broadcast_message(message))
+            await self._broadcast_message(message)
+
+        # Update the agent run record if it exists
+        if hasattr(self, 'agent_run'):
+            self.agent_run.chat_history.extend(step_chat_history)
 
     def update_step_info(
             self, model_output: CustomAgentOutput, step_info: CustomAgentStepInfo = None
@@ -321,7 +337,7 @@ class CustomAgent(Agent):
 
         # Limit actions to maximum allowed per step
         parsed.action = parsed.action[: self.max_actions_per_step]
-        self._log_response(parsed)
+        await self._log_response(parsed)
         self.n_steps += 1
         
         return parsed

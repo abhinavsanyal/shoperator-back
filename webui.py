@@ -56,17 +56,17 @@ async def stop_agent():
         message = "Stop requested - the agent will halt at the next safe point"
         logger.info(f"🛑 {message}")
 
-        # Return UI updates
+        # Return UI updates in expected format
         return (
             message,                                        # errors_output
             gr.update(value="Stopping...", interactive=False),  # stop_button
-            gr.update(interactive=False),                      # run_button
+            gr.update(interactive=False)                       # run_button
         )
     except Exception as e:
-        error_msg = f"Error during stop: {str(e)}"
-        logger.error(error_msg)
+        logger.error(f"Error during stop: {str(e)}")
+        # Return a consistent error response
         return (
-            error_msg,
+            f"Error during stop: {str(e)}",
             gr.update(value="Stop", interactive=True),
             gr.update(interactive=True)
         )
@@ -120,7 +120,8 @@ async def run_browser_agent(
     max_actions_per_step,
     tool_calling_method,
     status_callback=None,
-    websocket_callback=None
+    websocket_callback=None,
+    agent_run=None
 ):
     global _global_agent_state
     _global_agent_state.clear_stop()  # Clear any previous stop requests
@@ -189,7 +190,8 @@ async def run_browser_agent(
                     max_actions_per_step=max_actions_per_step,
                     tool_calling_method=tool_calling_method,
                     status_callback=status_callback,
-                    websocket_callback=websocket_callback
+                    websocket_callback=websocket_callback,
+                    agent_run=agent_run
             )
             return (final_result, errors, model_actions, model_thoughts, trace_file,
                     history_file, browser_context, history_gif_url, recording_url, agent_history)
@@ -314,7 +316,8 @@ async def run_custom_agent(
     max_actions_per_step,
     tool_calling_method,
     status_callback=None,
-    websocket_callback=None
+    websocket_callback=None,
+    agent_run=None
 ):
     try:
         global _global_browser, _global_browser_context, _global_agent_state
@@ -373,7 +376,8 @@ async def run_custom_agent(
             agent_state=_global_agent_state,
             tool_calling_method=tool_calling_method,
             status_callback=status_callback,
-            websocket_callback=websocket_callback
+            websocket_callback=websocket_callback,
+            agent_run=agent_run
         )
         history = await agent.run(max_steps=max_steps)
 
