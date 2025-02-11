@@ -678,7 +678,6 @@ class CustomAgent(Agent):
             images.append(image)
 
         if images:
-            # Save the GIF
             images[0].save(
                 output_path,
                 save_all=True,
@@ -688,5 +687,15 @@ class CustomAgent(Agent):
                 optimize=False,
             )
             logger.info(f'Created GIF at {output_path}')
+            # New: Upload the GIF to S3 and log the returned URL
+            try:
+                from src.utils.s3_utils import upload_file_to_s3
+                gif_url = upload_file_to_s3(output_path)
+                logger.info(f"Uploaded GIF to S3: {gif_url}")
+                # Optionally, store this URL in a variable or in a global agent state
+                # so that it can later be used to update the AgentRun record.
+                self.history_gif_url = gif_url  # (For example, if self supports this.)
+            except Exception as e:
+                logger.error(f"Failed to upload GIF to S3: {e}")
         else:
             logger.warning('No images found in history to create GIF')

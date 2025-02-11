@@ -11,6 +11,9 @@ from src.utils.utils import update_model_dropdown, get_latest_files, capture_scr
 from datetime import datetime
 import json
 
+from dotenv import load_dotenv
+load_dotenv(override=True)
+
 # Import the required functions from webui
 from webui import (
     run_browser_agent,
@@ -18,6 +21,10 @@ from webui import (
     stop_research_agent,
     stop_agent
 )
+
+# Import the database modules
+from src.db.db import Database
+from src.db.models import AgentRun, ResearchRun
 
 # Initialize FastAPI app
 app = FastAPI(title="Shoperator Agent API")
@@ -128,6 +135,23 @@ class DeepResearchConfig(BaseModel):
     use_own_browser: bool
     headless: bool
 
+# Add after FastAPI initialization but before the routes
+@app.on_event("startup")
+async def startup_db_client():
+    mongodb_url = os.getenv("MONGODB_URI")
+    if not mongodb_url:
+        raise ValueError("MONGODB_URI environment variable not set")
+
+    # Debug: print and log the MongoDB URI being used
+    print(f"DEBUG: MONGODB_URI = {mongodb_url}")
+    logger.info(f"DEBUG: MONGODB_URI = {mongodb_url}")
+
+    await Database.connect_to_database(mongodb_url)
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    await Database.close_database_connection()
+
 # API endpoints
 @app.get("/config/default")
 async def get_default_config():
@@ -146,6 +170,18 @@ async def run_agent(config: AgentConfig, background_tasks: BackgroundTasks):
         # Create history directory if it doesn't exist
         if config.save_agent_history_path:
             os.makedirs(config.save_agent_history_path, exist_ok=True)
+        
+        # Create agent run record
+        agent_run = AgentRun(
+            client_id=client_id,
+            task=config.task,
+            max_steps=config.max_steps,
+            config=config.model_dump()
+        )
+        
+        # Store in MongoDB
+        db = Database.get_database()
+        await db.agent_runs.insert_one(agent_run.model_dump())
             
         # Initialize agent state
         _current_agent_state.update({
@@ -195,11 +231,9 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str):
             except Exception as e:
                 logger.error(f"Error in websocket callback: {e}")
 
-        # Create a custom callback that includes WebSocket streaming
         async def status_callback(step_number: int, memory: str, task_progress: str, future_plans: str, trace_file: Optional[str] = None, history_file: Optional[str] = None):
             await update_agent_status(step_number, memory, task_progress, future_plans, trace_file, history_file)
             
-            # Prepare the message for streaming
             message = {
                 "type": "agent_update",
                 "step": step_number,
@@ -209,7 +243,6 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str):
                 "timestamp": datetime.now().isoformat()
             }
             
-            # Broadcast to the specific client
             await manager.broadcast_to_client(client_id, json.dumps(message))
 
         # Use both callbacks in run_browser_agent
@@ -240,11 +273,29 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str):
             websocket_callback=websocket_callback
         )
         
-        # Get the browser context from the result
-        if isinstance(result, tuple) and len(result) >= 9:
-            _, _, _, _, _, _, _, _, _, browser_context = result
+        # Unpack extended results when available (custom agent branch returns extra data)
+        if isinstance(result, tuple) and len(result) >= 10:
+            (
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                browser_context,
+                history_gif_url,
+                recording_url,
+                agent_history
+            ) = result
             _global_browser_context = browser_context
-        
+            _current_agent_state["history_gif_url"] = history_gif_url
+            _current_agent_state["recording_url"] = recording_url
+            _current_agent_state["agent_history"] = agent_history
+        elif isinstance(result, tuple) and len(result) >= 7:
+            # Fallback for non-custom agents
+            (_, _, _, _, _, _, browser_context) = result
+            _global_browser_context = browser_context
+
         # Update final state
         _current_agent_state.update({
             "is_running": False,
@@ -253,6 +304,30 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str):
             "last_update": datetime.now().isoformat()
         })
         
+        # Update the AgentRun record with extended fields (including agent_history)
+        try:
+            from src.db.models import AgentRun  # AgentRun schema with new fields
+            db = Database.get_database()
+            update_fields = {}
+            if _current_agent_state.get("history_gif_url"):
+                update_fields["history_gif_url"] = _current_agent_state["history_gif_url"]
+            if _current_agent_state.get("recording_url"):
+                update_fields["recording_url"] = _current_agent_state["recording_url"]
+            if _current_agent_state.get("agent_history"):
+                agent_history_obj = _current_agent_state["agent_history"]
+                # If the object has a .dict() method (e.g., a Pydantic model), convert it.
+                if hasattr(agent_history_obj, "dict"):
+                    update_fields["agent_history"] = agent_history_obj.dict()
+                else:
+                    update_fields["agent_history"] = agent_history_obj
+            if update_fields:
+                await db.agent_runs.update_one(
+                    {"client_id": client_id},
+                    {"$set": update_fields}
+                )
+        except Exception as e:
+            logger.error(f"Failed to update AgentRun record with extended data: {e}")
+
         return result
     except Exception as e:
         error_message = {
