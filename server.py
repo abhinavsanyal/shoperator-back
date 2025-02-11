@@ -179,10 +179,22 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str):
     global _current_agent_state, _global_browser_context
     
     try:
-        # Create a websocket callback
+        # Create a websocket callback that handles both screenshots and status updates
         async def websocket_callback(message: str):
-            await manager.broadcast_to_client(client_id, message)
-            
+            try:
+                # Parse the message to handle different types
+                message_data = json.loads(message)
+                if message_data.get("type") == "browser_screenshot":
+                    # Add timestamp and client info to screenshot message
+                    message_data["timestamp"] = datetime.now().isoformat()
+                    message_data["client_id"] = client_id
+                
+                # Broadcast the message
+                await manager.broadcast_to_client(client_id, json.dumps(message_data))
+                logger.debug(f"Websocket message sent: {message_data['type']}")
+            except Exception as e:
+                logger.error(f"Error in websocket callback: {e}")
+
         # Create a custom callback that includes WebSocket streaming
         async def status_callback(step_number: int, memory: str, task_progress: str, future_plans: str, trace_file: Optional[str] = None, history_file: Optional[str] = None):
             await update_agent_status(step_number, memory, task_progress, future_plans, trace_file, history_file)

@@ -39,9 +39,76 @@ from .custom_views import CustomAgentOutput, CustomAgentStepInfo
 
 import asyncio
 from datetime import datetime
+from enum import Enum
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+class WebSocketMessageType(Enum):
+    AGENT_LOG = "agent_log"
+    AGENT_ACTION = "agent_action"
+    BROWSER_SCREENSHOT = "browser_screenshot"
+    AGENT_ERROR = "agent_error"
+    AGENT_STATUS = "agent_status"
+
+class WebSocketMessage(BaseModel):
+    type: str
+    timestamp: str = datetime.now().isoformat()
+    data: dict
+
+class ScreenshotStreamer:
+    def __init__(self, websocket_callback, interval: float = 0.5):
+        self.websocket_callback = websocket_callback
+        self.interval = interval
+        self.is_running = False
+        self._task = None
+        
+    async def start(self, browser_context):
+        if self._task is not None:
+            logger.warning("Screenshot streamer already running")
+            return
+            
+        self.is_running = True
+        self._task = asyncio.create_task(self._stream_screenshots(browser_context))
+        logger.info("Screenshot streaming task started")
+        
+    async def stop(self):
+        logger.info("Stopping screenshot streaming...")
+        self.is_running = False
+        if self._task:
+            try:
+                await self._task
+                self._task = None
+            except Exception as e:
+                logger.error(f"Error stopping screenshot stream: {e}")
+            
+    async def _stream_screenshots(self, browser_context):
+        logger.info("Starting screenshot streaming loop")
+        while self.is_running:
+            try:
+                # Get the current page from browser context
+                page = await browser_context.get_current_page()
+                if page:
+                    # Take screenshot using Playwright's screenshot method
+                    screenshot_bytes = await page.screenshot(
+                        type='jpeg',
+                        quality=80,  # Reduce quality for better performance
+                        full_page=False  # Only visible viewport
+                    )
+                    # Convert to base64
+                    screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+                    
+                    if screenshot_base64 and self.websocket_callback:
+                        message = WebSocketMessage(
+                            type=WebSocketMessageType.BROWSER_SCREENSHOT.value,
+                            data={"screenshot": screenshot_base64}
+                        )
+                        await self.websocket_callback(message.model_dump_json())
+                        logger.debug("Screenshot sent successfully")
+            except Exception as e:
+                logger.error(f"Screenshot streaming error: {str(e)}")
+                await asyncio.sleep(1)  # Wait longer on error
+            await asyncio.sleep(self.interval)
 
 class CustomAgent(Agent):
     def __init__(
@@ -136,6 +203,9 @@ class CustomAgent(Agent):
         )
         self.status_callback = status_callback
         self.websocket_callback = websocket_callback
+        self.screenshot_streamer = None
+        if websocket_callback:
+            self.screenshot_streamer = ScreenshotStreamer(websocket_callback, interval=0.5)
 
     def _setup_action_models(self) -> None:
         """Setup dynamic action models from controller's registry"""
@@ -144,50 +214,53 @@ class CustomAgent(Agent):
         # Create output model with the dynamic actions
         self.AgentOutput = CustomAgentOutput.type_with_custom_actions(self.ActionModel)
 
+    async def _broadcast_message(self, message: WebSocketMessage):
+        """Helper method to broadcast websocket messages"""
+        if self.websocket_callback:
+            try:
+                await self.websocket_callback(message.model_dump_json())
+            except Exception as e:
+                logger.error(f"Websocket broadcast error: {e}")
+
     def _log_response(self, response: CustomAgentOutput) -> None:
-        """Log the model's response"""
-        if "Success" in response.current_state.prev_action_evaluation:
-            emoji = "✅"
-        elif "Failed" in response.current_state.prev_action_evaluation:
-            emoji = "❌"
-        else:
-            emoji = "🤷"
+        """Improved log response with structured messages"""
+        # Determine status emoji
+        emoji = "✅" if "Success" in response.current_state.prev_action_evaluation else "❌" if "Failed" in response.current_state.prev_action_evaluation else "🤷"
 
-        # Create log messages
-        log_messages = [
-            (f"{emoji} Eval", response.current_state.prev_action_evaluation),
-            ("🧠 New Memory", response.current_state.important_contents),
-            ("⏳ Task Progress", response.current_state.task_progress),
-            ("📋 Future Plans", response.current_state.future_plans),
-            ("🤔 Thought", response.current_state.thought),
-            ("🎯 Summary", response.current_state.summary)
-        ]
+        # Create structured log messages
+        log_items = {
+            f"{emoji} Eval": response.current_state.prev_action_evaluation,
+            "🧠 New Memory": response.current_state.important_contents,
+            "⏳ Task Progress": response.current_state.task_progress,
+            "📋 Future Plans": response.current_state.future_plans,
+            "🤔 Thought": response.current_state.thought,
+            "🎯 Summary": response.current_state.summary
+        }
 
-        # Log to console and broadcast to websocket if available
-        for prefix, content in log_messages:
+        # Log and broadcast each item
+        for prefix, content in log_items.items():
             logger.info(f"{prefix}: {content}")
-            if self.websocket_callback:
-                message = {
-                    "type": "agent_log",
+            message = WebSocketMessage(
+                type=WebSocketMessageType.AGENT_LOG.value,
+                data={
                     "prefix": prefix,
-                    "content": content,
-                    "timestamp": datetime.now().isoformat()
+                    "content": content
                 }
-                asyncio.create_task(self.websocket_callback(json.dumps(message)))
+            )
+            asyncio.create_task(self._broadcast_message(message))
 
         # Log actions
         for i, action in enumerate(response.action):
-            action_msg = f"🛠️ Action {i + 1}/{len(response.action)}: {action.model_dump_json(exclude_unset=True)}"
-            logger.info(action_msg)
-            if self.websocket_callback:
-                message = {
-                    "type": "agent_action",
+            logger.info(f"🛠️ Action {i + 1}/{len(response.action)}: {action.model_dump_json(exclude_unset=True)}")
+            message = WebSocketMessage(
+                type=WebSocketMessageType.AGENT_ACTION.value,
+                data={
                     "action_number": i + 1,
                     "total_actions": len(response.action),
-                    "action": action.model_dump_json(exclude_unset=True),
-                    "timestamp": datetime.now().isoformat()
+                    "action": action.model_dump_json(exclude_unset=True)
                 }
-                asyncio.create_task(self.websocket_callback(json.dumps(message)))
+            )
+            asyncio.create_task(self._broadcast_message(message))
 
     def update_step_info(
             self, model_output: CustomAgentOutput, step_info: CustomAgentStepInfo = None
@@ -331,8 +404,20 @@ class CustomAgent(Agent):
                 self._make_history_item(model_output, state, result)
 
     async def run(self, max_steps: int = 100) -> AgentHistoryList:
-        """Execute the task with maximum number of steps"""
+        """Updated run method with screenshot streaming"""
         try:
+            # Start screenshot streaming if enabled
+            if self.screenshot_streamer:
+                logger.info("Starting screenshot streaming...")
+                await self.screenshot_streamer.start(self.browser_context)
+
+            # Broadcast initial status
+            message = WebSocketMessage(
+                type=WebSocketMessageType.AGENT_STATUS.value,
+                data={"status": "started", "task": self.task}
+            )
+            await self._broadcast_message(message)
+
             self._log_agent_run()
 
             # Execute initial actions if provided
@@ -386,7 +471,32 @@ class CustomAgent(Agent):
 
             return self.history
 
+        except Exception as e:
+            # Broadcast error
+            message = WebSocketMessage(
+                type=WebSocketMessageType.AGENT_ERROR.value,
+                data={"error": str(e)}
+            )
+            await self._broadcast_message(message)
+            raise e
+
         finally:
+            # Stop screenshot streaming
+            if self.screenshot_streamer:
+                logger.info("Stopping screenshot streaming...")
+                await self.screenshot_streamer.stop()
+
+            # Broadcast completion status
+            message = WebSocketMessage(
+                type=WebSocketMessageType.AGENT_STATUS.value,
+                data={
+                    "status": "completed",
+                    "success": self.history.is_done(),
+                    "steps": self.n_steps
+                }
+            )
+            await self._broadcast_message(message)
+
             self.telemetry.capture(
                 AgentEndTelemetryEvent(
                     agent_id=self.agent_id,

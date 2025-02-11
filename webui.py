@@ -1,5 +1,6 @@
 import pdb
 import logging
+import json
 
 from dotenv import load_dotenv
 
@@ -515,7 +516,20 @@ async def run_with_stream(
     else:
         try:
             _global_agent_state.clear_stop()
-            # Run the shoperator browser agent in the background
+            
+            # Create websocket callback for streaming
+            async def websocket_callback(message: str):
+                try:
+                    message_data = json.loads(message)
+                    if message_data.get("type") == "browser_screenshot":
+                        # Update the browser view with the new screenshot
+                        screenshot = message_data["data"]["screenshot"]
+                        html_content = f'<img src="data:image/jpeg;base64,{screenshot}" style="width:{stream_vw}vw; height:{stream_vh}vh; border:1px solid #ccc;">'
+                        yield [html_content] + [None] * 9  # Yield only the HTML update
+                except Exception as e:
+                    logger.error(f"Error processing websocket message: {e}")
+
+            # Run the agent with the websocket callback
             agent_task = asyncio.create_task(
                 run_browser_agent(
                     agent_type=agent_type,
@@ -539,7 +553,8 @@ async def run_with_stream(
                     max_steps=max_steps,
                     use_vision=use_vision,
                     max_actions_per_step=max_actions_per_step,
-                    tool_calling_method=tool_calling_method
+                    tool_calling_method=tool_calling_method,
+                    websocket_callback=websocket_callback
                 )
             )
 
