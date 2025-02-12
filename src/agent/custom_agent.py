@@ -41,6 +41,7 @@ import asyncio
 from datetime import datetime
 from enum import Enum
 from pydantic import BaseModel
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -612,8 +613,20 @@ class CustomAgent(Agent):
             logger.warning('No history to create GIF from')
             return
 
+        # Generate unique filename using timestamp and random string
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        random_suffix = str(uuid.uuid4())[:8]  # Take first 8 chars of UUID
+        unique_filename = f'agent_history_{timestamp}_{random_suffix}.gif'
+        
+        # If output_path is a directory, append the unique filename
+        if os.path.isdir(output_path):
+            output_path = os.path.join(output_path, unique_filename)
+        else:
+            # If output_path is a file path, replace the filename portion with our unique name
+            output_dir = os.path.dirname(output_path)
+            output_path = os.path.join(output_dir, unique_filename)
+
         images = []
-        # if history is empty or first screenshot is None, we can't create a gif
         if not self.history.history or not self.history.history[0].state.screenshot:
             logger.warning('No history or first screenshot to create GIF from')
             return
@@ -703,14 +716,15 @@ class CustomAgent(Agent):
                 optimize=False,
             )
             logger.info(f'Created GIF at {output_path}')
-            # New: Upload the GIF to S3 and log the returned URL
+            
+            # Upload to S3 with the unique filename
             try:
                 from src.utils.s3_utils import upload_file_to_s3
-                gif_url = upload_file_to_s3(output_path)
+                # Use the unique filename as the S3 key
+                s3_key = f"agent_gifs/{unique_filename}"
+                gif_url = upload_file_to_s3(output_path, s3_key)
                 logger.info(f"Uploaded GIF to S3: {gif_url}")
-                # Optionally, store this URL in a variable or in a global agent state
-                # so that it can later be used to update the AgentRun record.
-                self.history_gif_url = gif_url  # (For example, if self supports this.)
+                self.history_gif_url = gif_url
             except Exception as e:
                 logger.error(f"Failed to upload GIF to S3: {e}")
         else:

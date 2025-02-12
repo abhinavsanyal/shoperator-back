@@ -19,7 +19,7 @@ class AgentRun(BaseModel):
     config: Dict[str, Any]
     history_gif_url: Optional[str] = None  # URL for the agent_history.gif on S3
     recording_url: Optional[str] = None    # URL for the video (.webm) recording on S3
-    agent_history: Optional[str] = None  # New field for agent history JSON
+    agent_history: Optional[Dict[str, Any]] = None  # Changed from Optional[str] to Optional[Dict[str, Any]]
     chat_history: List[str] = Field(default_factory=list)  # New field to store step-by-step chat logs
     
     class Config:

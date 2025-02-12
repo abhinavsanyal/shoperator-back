@@ -171,7 +171,6 @@ async def run_agent(config: AgentConfig, background_tasks: BackgroundTasks):
         # Validate task with guardrail
         validation = await guardrail(config.task)
         if not validation["pass"]:
-            # Return a 400 Bad Request instead of 500 Internal Server Error
             return JSONResponse(
                 status_code=400,
                 content={
@@ -179,7 +178,10 @@ async def run_agent(config: AgentConfig, background_tasks: BackgroundTasks):
                     "detail": validation["comment"]
                 }
             )
-            
+        
+        # Extract dynamic filters
+        dynamic_filters = await get_prompt_dynamic_filters(config.task)
+        
         # Create a unique client_id for this session
         client_id = str(datetime.now().timestamp())
         
@@ -198,7 +200,7 @@ async def run_agent(config: AgentConfig, background_tasks: BackgroundTasks):
         
         # Store in MongoDB
         db = Database.get_database()
-        await db.agent_runs.insert_one(agent_run.model_dump())
+        result = await db.agent_runs.insert_one(agent_run.model_dump())
             
         # Initialize agent state
         _current_agent_state.update({
@@ -222,11 +224,23 @@ async def run_agent(config: AgentConfig, background_tasks: BackgroundTasks):
             agent_run  # Pass the agent_run instance
         )
         
-        return {"message": "Agent started successfully", "client_id": client_id}
+        return {
+            "task": config.task,
+            "dynamic_filters": dynamic_filters,
+            "client_id": client_id,
+            "message": "Agent started successfully",
+            "status": "running",
+            "run_id": str(result.inserted_id) 
+        }
     except Exception as e:
-        _current_agent_state["is_running"] = False
-        _current_agent_state["errors"] = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error running agent: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Failed to start agent",
+                "detail": str(e)
+            }
+        )
 
 async def run_agent_with_status_updates(config: AgentConfig, client_id: str, agent_run: AgentRun):
     """Run the agent while updating status"""
@@ -607,6 +621,128 @@ async def guardrail(task: str) -> Dict[str, Any]:
             "pass": False,
             "comment": f"Error validating task: {str(e)}"
         }
+
+async def get_prompt_dynamic_filters(task: str) -> Dict[str, Any]:
+    """
+    Analyzes the task string and extracts potential filter variations.
+    Returns a dictionary with key words and their alternative options.
+    """
+    try:
+        print(f"Starting dynamic filter extraction for task: {task}")
+        
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,
+            api_key=SecretStr(os.getenv("OPENAI_API_KEY", ""))
+        )
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a filter extraction system that analyzes shopping-related tasks and identifies key terms that could have alternatives.
+            For each key term (like website names, colors, price indicators, gender, etc.), provide 2-3 relevant alternatives.
+            
+            Format your response as a JSON object where:
+            - Keys are the original terms found in the task
+            - Values are arrays of alternative options
+            
+            Example Task: "Go to Amazon and find me the cheapest Black shirt for men"
+            Example Response:
+            {{
+                "Amazon": ["Walmart", "Target", "eBay"],
+                "cheapest": ["most expensive", "mid-range", "premium"],
+                "Black": ["White", "Blue", "Gray"],
+                "men": ["women", "unisex", "kids"]
+            }}
+            
+            Only include meaningful shopping-related terms that could serve as filters. Ignore common words or articles."""),
+            ("user", "Task: {task}")
+        ])
+        
+        chain = prompt | llm
+        response = await chain.ainvoke({"task": task})
+        
+        # Parse the response
+        result = json.loads(response.content)
+        print(f"Extracted filters: {result}")
+        return result
+        
+    except Exception as e:
+        print(f"Error in dynamic filter extraction: {str(e)}")
+        logger.error(f"Error in dynamic filter extraction: {str(e)}")
+        return {}
+
+@app.get("/agent-runs/get/{clerk_id}")
+async def get_agent_runs(clerk_id: str):
+    """Get all agent runs for a specific clerk_id"""
+    try:
+        # Get database instance
+        db = Database.get_database()
+        
+        # Query the database for all agent runs matching the clerk_id
+        # Sort by start_time in descending order (newest first)
+        cursor = db.agent_runs.find(
+            {"clerk_id": clerk_id}
+        ).sort("start_time", -1)
+        
+        # Convert cursor to list of AgentRun models
+        agent_runs = []
+        async for run in cursor:
+            # Convert MongoDB _id to string
+            run["_id"] = str(run["_id"])
+            agent_runs.append(AgentRun(**run))
+        
+        return {
+            "agent_runs": [run.model_dump() for run in agent_runs],
+            "total": len(agent_runs)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching agent runs: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch agent runs: {str(e)}"
+        )
+
+@app.get("/agent-run/get/{agent_run_id}")
+async def get_agent_run(agent_run_id: str):
+    """Get a specific agent run by its ID"""
+    try:
+        from bson import ObjectId
+        
+        # Get database instance
+        db = Database.get_database()
+        
+        # Try to convert string ID to ObjectId
+        try:
+            object_id = ObjectId(agent_run_id)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid agent run ID format: {str(e)}"
+            )
+        
+        # Query the database for the specific agent run
+        agent_run = await db.agent_runs.find_one({"_id": object_id})
+        
+        if not agent_run:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent run with ID {agent_run_id} not found"
+            )
+        
+        # Convert MongoDB _id to string
+        agent_run["_id"] = str(agent_run["_id"])
+        
+        # Convert to AgentRun model and return
+        return AgentRun(**agent_run).model_dump()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching agent run: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch agent run: {str(e)}"
+        )
 
 def main():
     """Run the FastAPI server"""
