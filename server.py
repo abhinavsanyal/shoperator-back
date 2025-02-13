@@ -263,20 +263,22 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
             except Exception as e:
                 logger.error(f"Error in websocket callback: {e}")
 
-        async def status_callback(step_number: int, memory: str, task_progress: str, future_plans: str, trace_file: Optional[str] = None, history_file: Optional[str] = None):
+        async def status_callback(step_number: int, memory: str, task_progress: str, future_plans: str, client_id: str, trace_file: Optional[str] = None, history_file: Optional[str] = None):
             await update_agent_status(step_number, memory, task_progress, future_plans, trace_file, history_file)
+            print(f"Updating agent status: {step_number}, {memory}")
             
+            # Send websocket message when agent finishes
             message = {
-                "type": "agent_update",
-                "step": step_number,
-                "memory": str(memory) if memory is not None else "",
-                "task_progress": str(task_progress) if task_progress is not None else "",
-                "future_plans": str(future_plans) if future_plans is not None else "",
+                "type": "agent_finished",
+                "data": "Agent finished its work",
                 "timestamp": datetime.now().isoformat()
             }
-            
             await manager.broadcast_to_client(client_id, json.dumps(message))
 
+        # Create a partial function that includes the client_id
+        async def status_callback_with_client(step_number: int, memory: str, task_progress: str, future_plans: str, trace_file: Optional[str] = None, history_file: Optional[str] = None):
+            await status_callback(step_number, memory, task_progress, future_plans, client_id, trace_file, history_file)
+        
         # Run the agent with the websocket callback
         result = await run_browser_agent(
             agent_type=config.agent_type,
@@ -301,7 +303,7 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
             use_vision=config.use_vision,
             max_actions_per_step=config.max_actions_per_step,
             tool_calling_method=config.tool_calling_method,
-            status_callback=status_callback if config.agent_type == "custom" else None,
+            status_callback=status_callback_with_client if config.agent_type == "custom" else None,
             websocket_callback=websocket_callback,
             agent_run=agent_run
         )
@@ -332,7 +334,6 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
         # Update final state
         _current_agent_state.update({
             "is_running": False,
-            "current_step": config.max_steps,
             "task_progress": "Completed",
             "last_update": datetime.now().isoformat()
         })
@@ -380,6 +381,27 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
                     {"client_id": client_id},
                     {"$set": update_fields}
                 )
+                
+                # Generate UI if memory exists
+                if _current_agent_state["memory"]:
+                    generated_ui = await generative_ui_builder(_current_agent_state["memory"])
+                    print("\nGenerated UI Output:")
+                    print(generated_ui)
+                    
+                    # Optionally store the generated UI in the database
+                    await db.agent_runs.update_one(
+                        {"client_id": client_id},
+                        {"$set": {"generated_ui": generated_ui}}
+                    )
+
+                # Move the websocket broadcast here, after DB update is successful
+                message = {
+                    "type": "agent_finished",
+                    "data": "Agent finished its work",
+                    "timestamp": datetime.now().isoformat()
+                }
+                await manager.broadcast_to_client(client_id, json.dumps(message))
+                
         except Exception as e:
             logger.error(f"Failed to update AgentRun record with extended data: {e}")
 
@@ -763,6 +785,81 @@ async def get_agent_run(agent_run_id: str):
             status_code=500,
             detail=f"Failed to fetch agent run: {str(e)}"
         )
+
+async def generative_ui_builder(memory_text: str) -> str:
+    """
+    Transforms unstructured memory text into structured HTML+Tailwind UI
+    """
+    # Base template that includes necessary Tailwind CDN and basic layout
+    base_template = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script src="https://unpkg.com/@alpinejs/collapse@3.x.x/dist/cdn.min.js"></script>
+        <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+        <title>Shopping Analysis</title>
+    </head>
+    <body class="bg-gray-50">
+        <div class="container mx-auto px-4 py-8">
+            {{content}}
+        </div>
+    </body>
+    </html>
+    """
+
+    system_prompt = """You are an expert UI developer who converts unstructured text about shopping and product research into beautiful, functional HTML+Tailwind interfaces.
+
+    IMPORTANT: You must ONLY output the complete HTML code. Do not include any explanations, markdown code blocks, or additional text.
+    Your entire response should be valid HTML that starts with <!DOCTYPE html> and ends with </html>.
+
+    Requirements:
+    1. If the text contains multiple product descriptions, create a sortable/filterable table or comparison UI
+    2. Use semantic HTML and accessible components
+    3. Include interactive elements where appropriate (using Alpine.js for functionality)
+    4. Use the provided base template and insert your code where {{content}} is
+    5. Focus on creating the most appropriate UI for the data (tables, cards, lists, etc.)
+    6. Include basic interactivity like sorting, filtering, or tabs if relevant
+
+    Remember: Output ONLY the HTML code. No explanations or markdown formatting."""
+
+    user_prompt = """Convert this text into HTML+Tailwind UI. Remember to output ONLY the HTML code:
+
+    {memory_text}"""
+
+    try:
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.2,
+            api_key=SecretStr(os.getenv("OPENAI_API_KEY", "")),
+            response_format={"type": "text"}  # Enforce text-only response
+        )
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("user", user_prompt)
+        ])
+
+        chain = prompt | llm
+        response = await chain.ainvoke({
+            "memory_text": memory_text
+        })
+        
+        # Extract only the HTML content
+        html_content = response.content.strip()
+        
+        # Verify the response starts with <!DOCTYPE html>
+        if not html_content.startswith("<!DOCTYPE html>"):
+            logger.warning("LLM response did not contain proper HTML. Using fallback template.")
+            return base_template.replace("{{content}}", f"<pre class='whitespace-pre-wrap'>{memory_text}</pre>")
+            
+        return html_content
+
+    except Exception as e:
+        logger.error(f"Error in generative_ui_builder: {str(e)}")
+        return f"<p class='text-red-500'>Error generating UI: {str(e)}</p>"
 
 def main():
     """Run the FastAPI server"""

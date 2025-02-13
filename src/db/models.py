@@ -16,6 +16,7 @@ class AgentRun(BaseModel):
     task_progress: Optional[str] = None
     future_plans: Optional[str] = None
     errors: Optional[str] = None
+    generated_ui: Optional[str] = None
     config: Dict[str, Any]
     history_gif_url: Optional[str] = None  # URL for the agent_history.gif on S3
     recording_url: Optional[str] = None    # URL for the video (.webm) recording on S3

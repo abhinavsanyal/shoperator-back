@@ -9,6 +9,16 @@ from datetime import datetime
 
 from .custom_views import CustomAgentStepInfo
 
+# Add this constant at the top of the file after imports
+ECOMMERCE_WEBSITES = {
+    "amazon": "https://www.amazon.com",
+    "walmart": "https://www.walmart.com",
+    "meesho": "https://www.meesho.com",
+    "flipkart": "https://www.flipkart.com",
+    "myntra": "https://www.myntra.com",
+    "ajio": "https://www.ajio.com",
+    "nykaa": "https://www.nykaa.com",
+}
 
 class CustomSystemPrompt(SystemPrompt):
     def important_rules(self) -> str:
@@ -60,6 +70,8 @@ class CustomSystemPrompt(SystemPrompt):
        - If you think all the requirements of user\'s instruction have been completed and no further operation is required, output the **Done** action to terminate the operation process.
        - Don't hallucinate actions.
        - If the task requires specific information - make sure to include everything in the done function. This is what the user will see.
+       - In case of e-commerce websites, you should always collect the product information and store it in memory.
+       - In e-commerce websites do not attempt to add to cart. Your job is to gather information only and collect the product related information in memory
        - If you are running out of steps (current step), think about speeding it up, and ALWAYS use the done action as the last action.
        - Note that you must verify if you've truly fulfilled the user's request by examining the actual page content, not just by looking at the actions you output but also whether the action is executed successfully. Pay particular attention when errors occur during action execution.
 
@@ -82,7 +94,9 @@ class CustomSystemPrompt(SystemPrompt):
        - Only provide the action sequence until you think the page will change.
        - Try to be efficient, e.g. fill forms at once, or chain actions where nothing changes on the page like saving, extracting, checkboxes...
        - only use multiple actions if it makes sense. 
-    """
+       """
+       
+        text += f"\n\n    "
         text += f"   - use maximum {self.max_actions_per_step} actions per sequence"
         return text
 

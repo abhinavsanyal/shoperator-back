@@ -513,6 +513,10 @@ class CustomAgent(Agent):
                 data={
                     "status": "completed",
                     "success": self.history.is_done(),
+                    "errors": self.history.errors(),
+                    "memory": step_info.memory,
+                    "task_progress": step_info.task_progress,
+                    "future_plans": step_info.future_plans,
                     "steps": self.n_steps
                 }
             )
@@ -565,7 +569,7 @@ class CustomAgent(Agent):
                 except Exception as e:
                     logger.error(f"Failed to upload recording to S3: {e}")
             
-            
+
 
     def _create_stop_history_item(self):
         """Create a history item for when the agent is stopped."""
