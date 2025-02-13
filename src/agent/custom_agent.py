@@ -725,6 +725,10 @@ class CustomAgent(Agent):
                 gif_url = upload_file_to_s3(output_path, s3_key)
                 logger.info(f"Uploaded GIF to S3: {gif_url}")
                 self.history_gif_url = gif_url
+                
+                # Remove local file after successful S3 upload
+                os.remove(output_path)
+                logger.info(f"Removed local GIF file: {output_path}")
             except Exception as e:
                 logger.error(f"Failed to upload GIF to S3: {e}")
         else:

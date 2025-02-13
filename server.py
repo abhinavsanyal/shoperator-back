@@ -687,11 +687,16 @@ async def get_agent_runs(clerk_id: str):
         agent_runs = []
         async for run in cursor:
             # Convert MongoDB _id to string
-            run["_id"] = str(run["_id"])
-            agent_runs.append(AgentRun(**run))
+            run_id = str(run["_id"])
+            run["_id"] = run_id
+            agent_run = AgentRun(**run)
+            # Create dictionary from model and explicitly add _id
+            run_dict = agent_run.model_dump()
+            run_dict["_id"] = run_id
+            agent_runs.append(run_dict)
         
         return {
-            "agent_runs": [run.model_dump() for run in agent_runs],
+            "agent_runs": agent_runs,
             "total": len(agent_runs)
         }
         
