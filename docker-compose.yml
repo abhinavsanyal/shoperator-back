@@ -31,6 +31,7 @@ services:
       - VNC_PASSWORD=${VNC_PASSWORD:-vncpassword}
       - CHROME_DEBUGGING_PORT=9222
       - CHROME_DEBUGGING_HOST=localhost
+      - MONGO_URI=${MONGO_URI:-mongodb://localhost:27017/narative}
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
     restart: unless-stopped

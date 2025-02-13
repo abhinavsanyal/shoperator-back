@@ -83,6 +83,8 @@ ENV RESOLUTION_HEIGHT=1080
 RUN mkdir -p /var/log/supervisor
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-EXPOSE 7788 6080 5900
+# Expose FastAPI port along with other ports
+EXPOSE 3030 7788 6080 5900
 
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# Update the CMD to run both supervisord and the FastAPI server
+CMD ["/bin/bash", "-c", "/usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf & uvicorn server:app --host 0.0.0.0 --port 3030"]
