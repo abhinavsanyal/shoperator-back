@@ -12,9 +12,9 @@ class AgentRun(BaseModel):
     status: str = "running"  # running, completed, failed, stopped
     steps_completed: int = 0
     max_steps: int
-    memory: str = ""
-    task_progress: str = ""
-    future_plans: str = ""
+    memory: Optional[str] = None
+    task_progress: Optional[str] = None
+    future_plans: Optional[str] = None
     errors: Optional[str] = None
     config: Dict[str, Any]
     history_gif_url: Optional[str] = None  # URL for the agent_history.gif on S3

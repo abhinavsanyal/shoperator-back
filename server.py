@@ -345,7 +345,10 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
             update_fields["status"] = "completed"
             update_fields["end_time"] = datetime.now().isoformat()
             update_fields["steps_completed"] = _current_agent_state["current_step"]
-            
+            update_fields["memory"] = _current_agent_state["memory"]
+            update_fields["task_progress"] = _current_agent_state["task_progress"]
+            update_fields["future_plans"] = _current_agent_state["future_plans"]
+
             if _current_agent_state.get("history_gif_url"):
                 print(f"Updating history_gif_url: {_current_agent_state['history_gif_url']}")
                 update_fields["history_gif_url"] = _current_agent_state["history_gif_url"]
@@ -382,6 +385,14 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
 
         return result
     except Exception as e:
+        update_fields = {}
+        update_fields["status"] = "failed"
+        update_fields["end_time"] = datetime.now().isoformat()
+        update_fields["errors"] = str(e)
+        await db.agent_runs.update_one(
+            {"client_id": client_id},
+            {"$set": update_fields}
+        )
         error_message = {
             "type": "error",
             "message": str(e),
