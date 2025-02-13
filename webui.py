@@ -191,7 +191,8 @@ async def run_browser_agent(
                     tool_calling_method=tool_calling_method,
                     status_callback=status_callback,
                     websocket_callback=websocket_callback,
-                    agent_run=agent_run
+                    agent_run=agent_run,
+                    enable_recording=enable_recording
             )
             return (final_result, errors, model_actions, model_thoughts, trace_file,
                     history_file, browser_context, history_gif_url, recording_url, agent_history)
@@ -317,7 +318,8 @@ async def run_custom_agent(
     tool_calling_method,
     status_callback=None,
     websocket_callback=None,
-    agent_run=None
+    agent_run=None,
+    enable_recording=False
 ):
     try:
         global _global_browser, _global_browser_context, _global_agent_state
@@ -377,7 +379,8 @@ async def run_custom_agent(
             tool_calling_method=tool_calling_method,
             status_callback=status_callback,
             websocket_callback=websocket_callback,
-            agent_run=agent_run
+            agent_run=agent_run,
+            save_recording_path=save_recording_path if enable_recording else None
         )
         history = await agent.run(max_steps=max_steps)
 

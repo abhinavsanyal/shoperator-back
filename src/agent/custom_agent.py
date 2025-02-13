@@ -42,6 +42,7 @@ from datetime import datetime
 from enum import Enum
 from pydantic import BaseModel
 import uuid
+import glob
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,7 @@ class CustomAgent(Agent):
             controller: Controller = Controller(),
             use_vision: bool = True,
             save_conversation_path: Optional[str] = None,
+            save_recording_path: Optional[str] = None,
             max_failures: int = 5,
             retry_delay: int = 10,
             system_prompt_class: Type[SystemPrompt] = SystemPrompt,
@@ -209,6 +211,8 @@ class CustomAgent(Agent):
         if websocket_callback:
             self.screenshot_streamer = ScreenshotStreamer(websocket_callback, interval=0.5)
         self.agent_run = agent_run
+        # Store save_recording_path as instance attribute
+        self.save_recording_path = save_recording_path
 
     def _setup_action_models(self) -> None:
         """Setup dynamic action models from controller's registry"""
@@ -536,6 +540,32 @@ class CustomAgent(Agent):
                     output_path = self.generate_gif
 
                 self.create_history_gif(output_path=output_path)
+
+            # Upload recording to S3 if available
+            if self.save_recording_path:
+                try:
+                    from src.utils.s3_utils import upload_file_to_s3
+                    # Get the latest recording file
+                    recording_files = glob.glob(os.path.join(self.save_recording_path, "*.[wW][eE][bB][mM]"))
+                    if recording_files:
+                        latest_recording = max(recording_files, key=os.path.getctime)
+                        # Generate unique filename for S3
+                        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        random_suffix = str(uuid.uuid4())[:8]
+                        s3_filename = f'agent_recordings/recording_{timestamp}_{random_suffix}.webm'
+                        
+                        # Upload to S3
+                        recording_url = upload_file_to_s3(latest_recording, s3_filename)
+                        logger.info(f"Uploaded recording to S3: {recording_url}")
+                        self.recording_url = recording_url
+                        
+                        # Remove local file after successful S3 upload
+                        os.remove(latest_recording)
+                        logger.info(f"Removed local recording file: {latest_recording}")
+                except Exception as e:
+                    logger.error(f"Failed to upload recording to S3: {e}")
+            
+            
 
     def _create_stop_history_item(self):
         """Create a history item for when the agent is stopped."""

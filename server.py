@@ -342,6 +342,10 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
             from src.db.models import AgentRun  # AgentRun schema with new fields
             db = Database.get_database()
             update_fields = {}
+            update_fields["status"] = "completed"
+            update_fields["end_time"] = datetime.now().isoformat()
+            update_fields["steps_completed"] = _current_agent_state["current_step"]
+            
             if _current_agent_state.get("history_gif_url"):
                 print(f"Updating history_gif_url: {_current_agent_state['history_gif_url']}")
                 update_fields["history_gif_url"] = _current_agent_state["history_gif_url"]
