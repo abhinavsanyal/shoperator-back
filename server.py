@@ -388,13 +388,13 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
                     print("\nGenerated UI Output:")
                     print(generated_ui)
                     
-                    # Optionally store the generated UI in the database
+                    # Await the database update
                     await db.agent_runs.update_one(
                         {"client_id": client_id},
                         {"$set": {"generated_ui": generated_ui}}
                     )
 
-                # Move the websocket broadcast here, after DB update is successful
+                # Only broadcast after all updates are complete
                 message = {
                     "type": "agent_finished",
                     "data": "Agent finished its work",
@@ -810,19 +810,21 @@ async def generative_ui_builder(memory_text: str) -> str:
     </html>
     """
 
-    system_prompt = """You are an expert UI developer who converts unstructured text about shopping and product research into beautiful, functional HTML+Tailwind interfaces.
+    system_prompt = """You are an expert UI developer who converts unstructured text about shopping and product research into simple, clean HTML with Tailwind styling.
 
     IMPORTANT: You must ONLY output the complete HTML code. Do not include any explanations, markdown code blocks, or additional text.
     Your entire response should be valid HTML that starts with <!DOCTYPE html> and ends with </html>.
 
     Requirements:
-    1. If the text contains multiple product descriptions, create a sortable/filterable table or comparison UI
-    2. Use semantic HTML and accessible components
-    3. Include interactive elements where appropriate (using Alpine.js for functionality)
+    1. Use only basic HTML elements (div, p, table, ul, etc.) - NO template tags or advanced Alpine.js directives
+    2. For interactivity, use simple CSS classes and avoid JavaScript/Alpine.js completely
+    3. Use semantic HTML and accessible components
     4. Use the provided base template and insert your code where {{content}} is
-    5. Focus on creating the most appropriate UI for the data (tables, cards, lists, etc.)
-    6. Include basic interactivity like sorting, filtering, or tabs if relevant
+    5. Focus on creating clean, readable layouts using Tailwind CSS
+    6. For tables or lists, use standard HTML elements with Tailwind styling
+    7. Avoid any dynamic templating syntax or client-side scripting
 
+    The HTML will be used in React with dangerouslySetInnerHTML, so keep it simple and compatible.
     Remember: Output ONLY the HTML code. No explanations or markdown formatting."""
 
     user_prompt = """Convert this text into HTML+Tailwind UI. Remember to output ONLY the HTML code:
