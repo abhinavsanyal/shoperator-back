@@ -261,15 +261,8 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
 
         async def status_callback(step_number: int, memory: str, task_progress: str, future_plans: str, client_id: str, trace_file: Optional[str] = None, history_file: Optional[str] = None):
             await update_agent_status(step_number, memory, task_progress, future_plans, trace_file, history_file)
-            print(f"Updating agent status: {step_number}, {memory}")
             
-            # Send websocket message when agent finishes
-            message = {
-                "type": "agent_finished",
-                "data": "Agent finished its work",
-                "timestamp": datetime.now().isoformat()
-            }
-            await manager.broadcast_to_client(client_id, json.dumps(message))
+
 
         # Create a partial function that includes the client_id
         async def status_callback_with_client(step_number: int, memory: str, task_progress: str, future_plans: str, trace_file: Optional[str] = None, history_file: Optional[str] = None):
