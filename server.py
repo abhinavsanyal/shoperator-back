@@ -680,8 +680,22 @@ async def guardrail(task: str) -> Dict[str, Any]:
         
         # Create the prompt template with properly escaped JSON
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a task validator that determines if a given task is related to e-commerce, online shopping, or product research. 
-            Respond with 'true' if the task is related to these topics, and 'false' if it isn't.
+            ("system", """You are a task validator that determines if a given task is related to or requires e-commerce, online shopping, or product research, either directly or indirectly. 
+
+            Consider tasks valid ('true') if they:
+            1. Directly involve shopping or product research
+            2. Require price comparisons or market research
+            3. Need product specifications or reviews
+            4. Involve building setups/kits that require purchasing items
+            5. Research-based tasks that would benefit from e-commerce site data
+            
+            Examples of valid tasks:
+            - "Find me a cheap laptop under $500"
+            - "I want to build a gaming setup with $2000 budget"
+            - "Research what camera equipment I need for wildlife photography"
+            - "Compare prices of standing desks across different stores"
+            
+            Respond with 'true' if the task relates to these topics (directly or indirectly), and 'false' if it doesn't.
             Also provide a brief explanation of your decision.
             
             Format your response exactly as:

@@ -131,7 +131,7 @@ class CustomSystemPrompt(SystemPrompt):
         Returns:
             str: Formatted system prompt
         """
-        AGENT_PROMPT = f"""You are a precise browser automation agent that interacts with websites through structured commands, specializing in gathering and researching e-commerce product information. Your role is to:
+        AGENT_PROMPT = f"""You are a precise browser automation agent that interacts with websites through structured commands, specializing in gathering and researching e-commerce product information for a given broad and open ended task. Your role is to:
     1. Analyze the provided webpage elements and structure
     2. Plan a sequence of actions to accomplish the given task
     3. Your final result MUST be a valid JSON as the **RESPONSE FORMAT** described, containing your action sequence and state assessment, No need extra content to expalin. 
