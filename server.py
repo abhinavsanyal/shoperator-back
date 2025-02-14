@@ -353,7 +353,6 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
                 print(f"Updating recording_url: {_current_agent_state['recording_url']}")
                 update_fields["recording_url"] = _current_agent_state["recording_url"]
             if _current_agent_state.get("agent_history"):
-                print(f"Updating agent_history:")
                 agent_history_obj = _current_agent_state["agent_history"]
                 # If the object has a .dict() method (e.g., a Pydantic model), convert it
                 if hasattr(agent_history_obj, "dict"):
@@ -377,7 +376,6 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
                     {"client_id": client_id},
                     {"$set": update_fields}
                 )
-                
                 # Generate UI if memory exists
                 if _current_agent_state["memory"]:
                     # Initialize variables
@@ -741,9 +739,12 @@ async def get_prompt_dynamic_filters(task: str) -> Dict[str, Any]:
             ("system", """You are a filter extraction system that analyzes shopping-related tasks and identifies key terms that could have alternatives.
             For each key term (like website names, colors, price indicators, gender, etc.), provide 2-3 relevant alternatives.
             
-            Format your response as a JSON object where:
+            Format your response as a valid JSON object where:
             - Keys are the original terms found in the task
             - Values are arrays of alternative options
+            - Ensure all strings are properly quoted
+            - Use double quotes for all keys and string values
+            - Ensure all arrays end with proper commas
             
             Example Task: "Go to Amazon and find me the cheapest Black shirt for men"
             Example Response:
@@ -761,8 +762,15 @@ async def get_prompt_dynamic_filters(task: str) -> Dict[str, Any]:
         chain = prompt | llm
         response = await chain.ainvoke({"task": task})
         
-        # Parse the response
-        result = json.loads(response.content)
+        # Add error checking for JSON parsing
+        try:
+            result = json.loads(response.content)
+        except json.JSONDecodeError as json_error:
+            print(f"JSON parsing error: {json_error}")
+            print(f"Raw response content: {response.content}")
+            # Return empty dict on parsing error
+            return {}
+            
         print(f"Extracted filters: {result}")
         return result
         
