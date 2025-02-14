@@ -146,10 +146,6 @@ async def startup_db_client():
     if not mongodb_url:
         raise ValueError("MONGODB_URI environment variable not set")
 
-    # Debug: print and log the MongoDB URI being used
-    print(f"DEBUG: MONGODB_URI = {mongodb_url}")
-    logger.info(f"DEBUG: MONGODB_URI = {mongodb_url}")
-
     await Database.connect_to_database(mongodb_url)
 
 @app.on_event("shutdown")
@@ -384,7 +380,61 @@ async def run_agent_with_status_updates(config: AgentConfig, client_id: str, age
                 
                 # Generate UI if memory exists
                 if _current_agent_state["memory"]:
-                    generated_ui = await generative_ui_builder(_current_agent_state["memory"])
+                    # Initialize variables
+                    completion_summary = None
+                    result_content = None
+                    
+                    # Try to get completion summary and result content from agent history
+                    try:
+                        agent_history_obj = _current_agent_state["agent_history"]
+                        if hasattr(agent_history_obj, "dict"):
+                            history_dict = agent_history_obj.dict()
+                        else:
+                            history_dict = agent_history_obj
+                            
+                        # Get the last history item
+                        if history_dict.get("history"):
+                            last_history_item = history_dict["history"][-1]
+                            
+                            # Look for 'done' action in model output
+                            if "model_output" in last_history_item and "action" in last_history_item["model_output"]:
+                                for action_item in last_history_item["model_output"]["action"]:
+                                    if isinstance(action_item, dict) and "done" in action_item:
+                                        completion_summary = action_item["done"].get("text", "")
+                                        break
+                            
+                            # Look for result content where is_done is true
+                            if "result" in last_history_item:
+                                for result_item in last_history_item["result"]:
+                                    if isinstance(result_item, dict) and result_item.get("is_done"):
+                                        result_content = result_item.get("extracted_content", "")
+                                        break
+                                        
+                    except Exception as e:
+                        logger.error(f"Error extracting completion summary or result content: {e}")
+                        completion_summary = None
+                        result_content = None
+                    
+                    # Safely combine all content parts with separators
+                    content_parts = []
+                    
+                    if completion_summary:
+                        content_parts.append(f"Summary:\n{completion_summary}")
+                    
+                    if _current_agent_state["memory"]:
+                        content_parts.append(f"Memory:\n{_current_agent_state['memory']}")
+                    
+                    if result_content:
+                        content_parts.append(f"Results:\n{result_content}")
+                    
+                    # Join all non-empty parts with double newlines
+                    content_for_ui = "\n\n".join(filter(None, content_parts))
+                    
+                    # If all parts were empty, use a default message
+                    if not content_for_ui:
+                        content_for_ui = "No content available from the agent run."
+                    
+                    generated_ui = await generative_ui_builder(content_for_ui)
                     print("\nGenerated UI Output:")
                     print(generated_ui)
                     
@@ -815,16 +865,43 @@ async def generative_ui_builder(memory_text: str) -> str:
     IMPORTANT: You must ONLY output the complete HTML code. Do not include any explanations, markdown code blocks, or additional text.
     Your entire response should be valid HTML that starts with <!DOCTYPE html> and ends with </html>.
 
-    Requirements:
-    1. Use only basic HTML elements (div, p, table, ul, etc.) - NO template tags or advanced Alpine.js directives
-    2. For interactivity, use simple CSS classes and avoid JavaScript/Alpine.js completely
-    3. Use semantic HTML and accessible components
-    4. Use the provided base template and insert your code where {{content}} is
-    5. Focus on creating clean, readable layouts using Tailwind CSS
-    6. For tables or lists, use standard HTML elements with Tailwind styling
-    7. Avoid any dynamic templating syntax or client-side scripting
+    Content Analysis Guidelines:
+    1. For product listings, comparisons, or specifications:
+       - ALWAYS use <table> with proper structure
+       - Include headers for each data column
+       - Use consistent formatting for prices and metrics
+    
+    2. For narrative content or general findings:
+       - Use article sections with clear headings
+       - Break down into readable paragraphs
+       - Use lists for sequential steps or bullet points
+    
+    3. For mixed content:
+       - Lead with key findings in a summary section
+       - Follow with detailed tables for product data
+       - Use expandable sections for additional details
 
-    The HTML will be used in React with dangerouslySetInnerHTML, so keep it simple and compatible.
+    Styling Guidelines:
+    Tables (for product data):
+    - Use 'border-collapse' with 'border-gray-200'
+    - Add 'hover:bg-gray-50' for row interactions
+    - Include 'px-6 py-4' for cell padding
+    - Use 'whitespace-nowrap' for prices/metrics
+    - Add 'sticky top-0 bg-white' for headers
+
+    Text Content:
+    - Use 'prose prose-lg' for narrative sections
+    - Include 'text-gray-600' for descriptive text
+    - Add 'font-semibold' for important points
+    - Use 'space-y-4' for proper spacing
+
+    Technical Requirements:
+    1. Use only basic HTML (div, p, table, ul, etc.)
+    2. No JavaScript or Alpine.js
+    3. Use semantic HTML and accessible components
+    4. Use the provided base template
+    5. Keep it React-compatible (dangerouslySetInnerHTML)
+
     Remember: Output ONLY the HTML code. No explanations or markdown formatting."""
 
     user_prompt = """Convert this text into HTML+Tailwind UI. Remember to output ONLY the HTML code:
@@ -833,10 +910,9 @@ async def generative_ui_builder(memory_text: str) -> str:
 
     try:
         llm = ChatOpenAI(
-            model="gpt-4o-mini",
-            temperature=0.2,
+            model="o3-mini",
             api_key=SecretStr(os.getenv("OPENAI_API_KEY", "")),
-            response_format={"type": "text"}  # Enforce text-only response
+            # response_format={"type": "text"}  # Enforce text-only response
         )
 
         prompt = ChatPromptTemplate.from_messages([
